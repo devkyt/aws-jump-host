@@ -1,0 +1,78 @@
+#!/bin/bash
+set -euo pipefail
+
+export HOME=/root
+export GOCACHE=/tmp/go-cache
+
+PROXY_VERSION="v1.10"
+
+dnf install -y golang git
+
+git clone --depth 1 --branch "$PROXY_VERSION" \
+  https://github.com/awslabs/aws-sigv4-proxy.git /tmp/sigv4-proxy
+
+cd /tmp/sigv4-proxy
+go build -o /usr/local/bin/aws-sigv4-proxy ./cmd/aws-sigv4-proxy
+
+rm -rf /tmp/sigv4-proxy /tmp/go-cache
+dnf remove -y golang git
+dnf clean all
+
+cat >/etc/systemd/system/sigv4-proxy-http.service <<'EOF'
+[Unit]
+Description=AWS SigV4 Proxy (HTTP upstream)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/aws-sigv4-proxy \
+  --name vpc-lattice-svcs \
+  --region ${region} \
+  --port :8080 \
+  --unsigned-payload \
+  --upstream-url-scheme http \
+  --log-failed-requests
+Restart=always
+RestartSec=5
+User=nobody
+Group=nobody
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat >/etc/systemd/system/sigv4-proxy-https.service <<'EOF'
+[Unit]
+Description=AWS SigV4 Proxy (HTTPS upstream)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/aws-sigv4-proxy \
+  --name vpc-lattice-svcs \
+  --region ${region} \
+  --port :8443 \
+  --unsigned-payload \
+  --upstream-url-scheme https \
+  --log-failed-requests
+Restart=always
+RestartSec=5
+User=nobody
+Group=nobody
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now sigv4-proxy-http sigv4-proxy-https
